@@ -25,10 +25,10 @@ from dataset.cifar100 import get_cifar100_dataloaders, get_cifar100_dataloaders_
 
 from helper.util import adjust_learning_rate
 
-# from distiller_zoo import DistillKL, HintLoss, Attention, Similarity, Correlation, VIDLoss, RKDLoss
+from distiller_zoo import DistillKL, HintLoss, Attention, Similarity, Correlation, VIDLoss, RKDLoss
 # from distiller_zoo import PKT, ABLoss, FactorTransfer, KDSVD, FSP, NSTLoss
 # from crd.criterion import CRDLoss
-from crrd.criterion import CRCDLoss
+from crcd.criterion import CRCDLoss
 
 
 from helper.loops import train_distill as train, validate
@@ -67,11 +67,12 @@ def parse_option():
                                  'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2',
                                  'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'ResNet50',
                                  'MobileNetV2', 'ShuffleV1', 'ShuffleV2'])
-    parser.add_argument('--path_t', type=str, default='save/models/resnet56_cifar100_lr_0.05_decay_0.0005_trial_0/resnet56_best.pth', help='teacher model snapshot')
+    parser.add_argument('--path_t', type=str, default='save/models/resnet56/resnet56_ckpt_epoch_240.pth', help='teacher model snapshot')
+    # parser.add_argument('--path_t', type=str, default='save/models/resnet56_cifar100_lr_0.05_decay_0.0005_trial_0/resnet56_best.pth', help='teacher model snapshot')
     # parser.add_argument('--path_t', type=str, default='save/models/resnet110_cifar100_lr_0.05_decay_0.0005_trial_0/resnet110_best.pth', help='teacher model snapshot')
 
     # distillation
-    parser.add_argument('--distill', type=str, default='kd', choices=[crcd', 'kd', 'hint', 'attention', 'similarity',
+    parser.add_argument('--distill', type=str, default='kd', choices=['crcd', 'kd', 'hint', 'attention', 'similarity',
                                                                       'correlation', 'vid', 'crd', 'kdsvd', 'fsp',
                                                                       'rkd', 'pkt', 'abound', 'factor', 'nst'])
     parser.add_argument('--trial', type=str, default='1', help='trial id')
@@ -317,6 +318,7 @@ def main():
     if opt.with_grad and opt.grad_kd_type in ['crd', 'crcd']:
         criterion_list.append(criterion_kd_grad)
 
+    print(criterion_list)
     # optimizer
     optimizer = optim.SGD(trainable_list.parameters(), 
                           lr=opt.learning_rate,
