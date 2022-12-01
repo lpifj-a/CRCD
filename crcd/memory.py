@@ -24,7 +24,16 @@ class ContrastMemory(nn.Module):
         norm2 = self.memory_v2.pow(2).sum(1, keepdim=True).pow(1. / 2)
         self.memory_v2 = self.memory_v2.div(norm2)
 
-        self.subnet = SubNet(inputSize, 256)
+        self.M_t_v1 = SubNet(inputSize, 256)
+        self.M_ts_v1 = SubNet(inputSize, 256)
+        self.M_t_v2 = SubNet(inputSize, 256)
+        self.M_ts_v2 = SubNet(inputSize, 256)
+
+        self.h1_v1 = Critic(256,512)
+        self.h2_v1 = Critic(256,512)
+        self.h1_v2 = Critic(256,512)
+        self.h2_v2 = Critic(256,512)
+
 
     def forward(self, v1, v2, y, idx=None):
         '''
@@ -60,54 +69,61 @@ class ContrastMemory(nn.Module):
         weight_v2 = torch.index_select(self.memory_v2, 0, idx.view(-1)).detach()
         weight_v2 = weight_v2.view(batchSize, K + 1, inputSize) # b, (1+k) f
 
-
         # anchor-student relationの計算
         anchor_relation = v1.unsqueeze(1) - anchor_v2.unsqueeze(0) + 1e-6  # b, na, f
         anchor_relation = anchor_relation.view(batchSize*batchSize, inputSize) #b*na, f
-        # ここにReLU関数と線形変換を追加する
-        anchor_relation = self.subnet(anchor_relation) # b*b, 256
-        # L2正規化
+        # サブネットワーク(ReLU関数と線形変換)
+        anchor_relation = self.M_ts_v1(anchor_relation) # b*b, 256
+        # h_2の計算
+        anchor_relation = self.h2_v1(anchor_relation) 
         anchor_relation = F.normalize(anchor_relation, p=2, dim=1)
 
         # anchor-teacher relation
         weight_v2_relation = weight_v2.unsqueeze(1) - anchor_v2.unsqueeze(1).unsqueeze(0) + 1e-6 # b, na, k+1, f
         weight_v2_relation = weight_v2_relation.view(batchSize*batchSize, self.K+1, inputSize) #b*na, K+1, f
-        # ここにReLU関数と線形変換を追加する
-        weight_v2_relation = self.subnet(weight_v2_relation) # b*b, 256
-        # L2正規化
+        # サブネットワーク(ReLU関数と線形変換)
+        weight_v2_relation = self.M_t_v1(weight_v2_relation) # b*b, 256
+        # h_1の計算
+        weight_v2_relation = self.h1_v1(weight_v2_relation)
         weight_v2_relation = F.normalize(weight_v2_relation, p=2, dim=2)
 
-
         # hの計算
-        # ここにrelationに対する線形変換を追加する
         # out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, f
-        out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize*2, 1))
+        out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize*2*2, 1))
         out_v1 = torch.exp(torch.div(out_v1, T))
 
     
+
         # compute anchor relation over the student side
         # choose anchor from student
         anchor_v1 = torch.index_select(self.memory_v1, 0, y.view(-1)).detach() # na, f
         # choose student features for contrastive loss
         weight_v1 = torch.index_select(self.memory_v1, 0, idx.view(-1)).detach()
         weight_v1 = weight_v1.view(batchSize, K + 1, inputSize) # b, (1+k) f
+
         # anchor-teacher relation
         anchor_relation = v2.unsqueeze(1) - anchor_v1.unsqueeze(0) + 1e-6 # b, na, f
-        anchor_relation = anchor_relation.view(batchSize*batchSize, inputSize) #b*na, f
+        anchor_relation = anchor_relation.view(batchSize*batchSize, inputSize) #b*na, f 
         # ここにReLU関数と線形変換を追加する
-        anchor_relation = self.subnet(anchor_relation) # b*b, 256
+        anchor_relation = self.M_ts_v2(anchor_relation) # b*b, 256
+        # h_2の計算
+        anchor_relation = self.h2_v2(anchor_relation) 
         anchor_relation = F.normalize(anchor_relation, p=2, dim=1)
+
         # anchor-student relation
         weight_v1_relation = weight_v1.unsqueeze(1) - anchor_v1.unsqueeze(1).unsqueeze(0) + 1e-6 # b, na, k+1, f
         weight_v1_relation = weight_v1_relation.view(batchSize*batchSize, self.K+1, inputSize) #b*na, K+1, f
         # ここにReLU関数と線形変換を追加する
-        weight_v1_relation = self.subnet(weight_v1_relation) # b*b, 256
+        weight_v1_relation = self.M_t_v2(weight_v1_relation) # b*b, 256
+        # h_1の計算
+        weight_v1_relation = self.h1_v2(weight_v1_relation)
         weight_v1_relation = F.normalize(weight_v1_relation, p=2, dim=2)
+
+        # hの計算
         # out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, 1
-        out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize*2, 1))
+        out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize*2*2, 1))
         out_v2 = torch.exp(torch.div(out_v2, T))
         
-        # print(self.params)
 
         # set Z if haven't been set yet
         if Z_v1 < 0:
@@ -153,11 +169,19 @@ class SubNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(in_dim, out_dim, bias=False)
         ) 
-
     def forward(self,x):
         x = self.sub_net(x)
         return x
 
+
+class Critic(nn.Module):
+    # 式(15)の h_1,h2
+    def __init__(self, in_dim=256, out_dim=512):
+        super(Critic,self).__init__()
+        self.critic = nn.Linear(in_dim, out_dim)
+    def forward(self,x):
+        x = self.critic(x)
+        return x
 
 class ContrastMemory_queue(nn.Module):
     """

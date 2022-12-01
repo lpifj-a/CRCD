@@ -1,0 +1,1 @@
+python train_student.py --distill crcd --grad_kd_type crcd --epochs 250 --batch_size 32
