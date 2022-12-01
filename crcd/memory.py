@@ -24,6 +24,8 @@ class ContrastMemory(nn.Module):
         norm2 = self.memory_v2.pow(2).sum(1, keepdim=True).pow(1. / 2)
         self.memory_v2 = self.memory_v2.div(norm2)
 
+        self.subnet = SubNet(inputSize, 256)
+
     def forward(self, v1, v2, y, idx=None):
         '''
         Args:
@@ -50,23 +52,39 @@ class ContrastMemory(nn.Module):
         # since there are learnable parameters in embedding layer in teacher side, 
         # similar to crd, we also calculate the crcd over the teacher and the student side
 
+
         # compute anchor relation over the student side
         # choose anchor from teacher
         anchor_v2 = torch.index_select(self.memory_v2, 0, y.view(-1)).detach() # na, f
         # choose teacher feature for contrastive loss
         weight_v2 = torch.index_select(self.memory_v2, 0, idx.view(-1)).detach()
         weight_v2 = weight_v2.view(batchSize, K + 1, inputSize) # b, (1+k) f
-        # anchor-student relation
-        anchor_relation = v1.unsqueeze(1) - anchor_v2.unsqueeze(0) + 1e-6 # b, na, f
+
+
+        # anchor-student relationの計算
+        anchor_relation = v1.unsqueeze(1) - anchor_v2.unsqueeze(0) + 1e-6  # b, na, f
         anchor_relation = anchor_relation.view(batchSize*batchSize, inputSize) #b*na, f
+        # ここにReLU関数と線形変換を追加する
+        anchor_relation = self.subnet(anchor_relation) # b*b, 256
+        # L2正規化
         anchor_relation = F.normalize(anchor_relation, p=2, dim=1)
+
         # anchor-teacher relation
         weight_v2_relation = weight_v2.unsqueeze(1) - anchor_v2.unsqueeze(1).unsqueeze(0) + 1e-6 # b, na, k+1, f
         weight_v2_relation = weight_v2_relation.view(batchSize*batchSize, self.K+1, inputSize) #b*na, K+1, f
+        # ここにReLU関数と線形変換を追加する
+        weight_v2_relation = self.subnet(weight_v2_relation) # b*b, 256
+        # L2正規化
         weight_v2_relation = F.normalize(weight_v2_relation, p=2, dim=2)
-        out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, f
+
+
+        # hの計算
+        # ここにrelationに対する線形変換を追加する
+        # out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, f
+        out_v1 = torch.bmm(weight_v2_relation, anchor_relation.view(batchSize*batchSize, inputSize*2, 1))
         out_v1 = torch.exp(torch.div(out_v1, T))
-        
+
+    
         # compute anchor relation over the student side
         # choose anchor from student
         anchor_v1 = torch.index_select(self.memory_v1, 0, y.view(-1)).detach() # na, f
@@ -76,17 +94,25 @@ class ContrastMemory(nn.Module):
         # anchor-teacher relation
         anchor_relation = v2.unsqueeze(1) - anchor_v1.unsqueeze(0) + 1e-6 # b, na, f
         anchor_relation = anchor_relation.view(batchSize*batchSize, inputSize) #b*na, f
+        # ここにReLU関数と線形変換を追加する
+        anchor_relation = self.subnet(anchor_relation) # b*b, 256
         anchor_relation = F.normalize(anchor_relation, p=2, dim=1)
         # anchor-student relation
         weight_v1_relation = weight_v1.unsqueeze(1) - anchor_v1.unsqueeze(1).unsqueeze(0) + 1e-6 # b, na, k+1, f
         weight_v1_relation = weight_v1_relation.view(batchSize*batchSize, self.K+1, inputSize) #b*na, K+1, f
+        # ここにReLU関数と線形変換を追加する
+        weight_v1_relation = self.subnet(weight_v1_relation) # b*b, 256
         weight_v1_relation = F.normalize(weight_v1_relation, p=2, dim=2)
-        out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, 1
+        # out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize, 1)) # b*ba, K+1, 1
+        out_v2 = torch.bmm(weight_v1_relation, anchor_relation.view(batchSize*batchSize, inputSize*2, 1))
         out_v2 = torch.exp(torch.div(out_v2, T))
         
+        # print(self.params)
 
         # set Z if haven't been set yet
         if Z_v1 < 0:
+            print("out_v1.mean()",out_v1.mean())
+            print("outputSize",outputSize)
             self.params[2] = out_v1.mean() * outputSize
             Z_v1 = self.params[2].clone().detach().item()
             print("normalization constant Z_v1 is set to {:.1f}".format(Z_v1))
@@ -116,6 +142,22 @@ class ContrastMemory(nn.Module):
             self.memory_v2.index_copy_(0, y, updated_v2)
 
         return out_v1, out_v2
+
+
+
+class SubNet(nn.Module):
+    # 式(10),(11)
+    def __init__(self, in_dim=128, out_dim=256):
+        super(SubNet,self).__init__()
+        self.sub_net = nn.Sequential(
+            nn.ReLU(inplace=True),
+            nn.Linear(in_dim, out_dim, bias=False)
+        ) 
+
+    def forward(self,x):
+        x = self.sub_net(x)
+        return x
+
 
 class ContrastMemory_queue(nn.Module):
     """
